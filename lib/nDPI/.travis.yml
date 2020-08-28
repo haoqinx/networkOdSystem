@@ -1,0 +1,190 @@
+language: c
+
+matrix:
+  include:
+    - os: osx
+      compiler: clang
+
+    - os: linux
+      compiler: gcc
+      dist: bionic
+      addons:
+        apt:
+          packages:
+            - libpcap-dev
+            - autogen
+
+    - os: linux
+      compiler: clang
+      dist: bionic
+      addons:
+        apt:
+          packages:
+            - libpcap-dev
+            - autogen
+
+    - os: linux
+      compiler: gcc
+      dist: bionic
+      arch: arm64
+      addons:
+        apt:
+          packages:
+            - libpcap-dev
+            - autogen
+
+    - os: linux
+      compiler: clang
+      dist: bionic
+      arch: arm64
+      addons:
+        apt:
+          packages:
+            - libpcap-dev
+            - autogen
+
+# Targets below have been disabled as we have no way
+# to debug on tsuch platforms at the moment
+#    - os: linux
+#      compiler: gcc
+#      dist: bionic
+#      arch: s390x
+#      addons:
+#        apt:
+#          packages:
+#            - libpcap-dev
+#            - autogen
+#
+#    - os: linux
+#      compiler: clang
+#      dist: bionic
+#      arch: s390x
+#      addons:
+#        apt:
+#          packages:
+#            - libpcap-dev
+#            - autogen
+
+    - os: linux
+      compiler: gcc-8
+      addons:
+        apt:
+          sources:
+            - ubuntu-toolchain-r-test
+          packages:
+            - g++-8
+            - libpcap-dev
+            - autogen
+      env:
+        - MATRIX_EVAL="CC=gcc-8"
+
+    - os: linux
+      compiler: gcc-9
+      addons:
+        apt:
+          sources:
+            - ubuntu-toolchain-r-test
+          packages:
+            - g++-9
+            - libpcap-dev
+            - autogen
+      env:
+        - MATRIX_EVAL="CC=gcc-9"
+
+    - os: linux
+      compiler: clang-8
+      addons:
+        apt:
+          sources:
+            - ubuntu-toolchain-r-test
+            - llvm-toolchain-trusty-8
+          packages:
+            - clang-8
+            - libpcap-dev
+            - autogen
+      env:
+        - MATRIX_EVAL="CC=clang-8"
+
+    - os: linux
+      compiler: clang-7
+      addons:
+        apt:
+          sources:
+            - ubuntu-toolchain-r-test
+            - llvm-toolchain-trusty-7
+          packages:
+            - clang-7
+            - libpcap-dev
+            - autogen
+      env:
+        - MATRIX_EVAL="CC=clang-7"
+
+    - name: fuzza
+      env: CFLAGS="-g3 -O0 -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION" LDFLAGS="-g3 -O0" QA_FUZZ=asan CC=clang-7 && ASAN_SYMBOLIZER_PATH=/usr/local/clang-7.0.0/bin/llvm-symbolizer
+      os: linux
+      compiler: clang-7
+      addons:
+        apt:
+          sources:
+            - ubuntu-toolchain-r-test
+            - llvm-toolchain-trusty-7
+          packages:
+            - clang-7
+            - libpcap-dev
+            - autogen
+    - name: fuzzm
+      env: CFLAGS="-g3 -O0 -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION -fsanitize=memory -fsanitize=fuzzer-no-link" LDFLAGS="-g3 -O0 -fsanitize=memory" QA_FUZZ=msan CC=clang-7 && MSAN_SYMBOLIZER_PATH=/usr/local/clang-7.0.0/bin/llvm-symbolizer
+      os: linux
+      compiler: clang-7
+      addons:
+        apt:
+          sources:
+            - ubuntu-toolchain-r-test
+            - llvm-toolchain-trusty-7
+          packages:
+            - clang-7
+            - libpcap-dev
+            - autogen
+    - name: fuzzu
+      env: CFLAGS="-g3 -O0 -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION" LDFLAGS="-g3 -O0" QA_FUZZ=ubsan CC=clang-7
+      os: linux
+      compiler: clang-7
+      addons:
+        apt:
+          sources:
+            - ubuntu-toolchain-r-test
+            - llvm-toolchain-trusty-7
+          packages:
+            - clang-7
+            - libpcap-dev
+            - autogen
+
+
+  before_install:
+  - eval "${MATRIX_EVAL}"
+
+before_script:
+  - ./autogen.sh
+#  - lcov --directory . --zerocounters
+
+script:
+  - if [ -n "$QA_FUZZ" -a "$QA_FUZZ" != "msan" ]; then ./configure --enable-fuzztargets ; else ./configure ; fi
+  - make
+
+#after_script:
+  - cd tests
+  - ./do.sh
+
+#after_success:
+#- cd ${TRAVIS_BUILD_DIR}
+#- lcov --directory . --capture --output-file coverage.info # capture coverage info
+#- lcov --remove coverage.info 'tests/*' 'packages/*' 'm4/*' 'doc/*' --output-file coverage.info
+#- lcov --list coverage.info # debug before upload
+#- coveralls-lcov --repo-token ${COVERALLS_TOKEN} coverage.info # uploads to coveralls
+
+notifications:
+  email:
+    recipients:
+      - packager@ntop.org
+    on_success: never
+    on_failure: always
