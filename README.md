@@ -6,7 +6,7 @@ A Detection system for abnormal network traffic in different application categor
 3. kibana running on port 5601
 ## How to use system:
 1. enter the dictionary
-2. run command: sudo python main.py (whitch must be root)
+2. run command: sudo python main.py (which must be root)
 ## Add your own apps
 1. Add a new app filter in ./lib/nDPI/, please refer to nDPI official documents for details.
 2. Replace the libndpi.so file in nfstream with a custom compiled file created in step 1.
