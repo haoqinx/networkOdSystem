@@ -4,6 +4,8 @@ import pandas as pd
 from configparser import ConfigParser
 import json
 from redis import Redis
+import numpy as np
+
 class Estransmission():
 
     def __init__(self,threshold,param,timeBasefile,attrlist,pool):
@@ -19,8 +21,8 @@ class Estransmission():
             raise RuntimeError("expect service ElasticSearch running on port 9200") from e
         try:
             self.windowSize=int(conf['default']['window'])
-            if self.windowSize & 1 == 0:
-                raise ValueError("expect a add number for window size")
+            if self.windowSize & 1 != 0:
+                raise ValueError("expect an even number for window size")
         except Exception as e:
             raise RuntimeError("error when parsing window size from config.ini file")
 
@@ -32,13 +34,17 @@ class Estransmission():
         with open(timeBasefile)as f:
             lines = f.readlines()
             for line in lines:
-                self._base_time[line.split(":")[0]] = line.split(":")[1]
+                self._base_time[line.split(":")[0]] = int(line.split(":")[1])
         self.r= Redis(connection_pool=pool)
-
+        self.Percentile={
+            '_90':1.28155,
+            '_95':1.64485,
+        }
     def getBaseTime(self, classifyName):
         return int(self._base_time[classifyName])
 
     def redis2es(self, app):
+        self.createIndex(app.lower())
         ACTIIONS = []
         data = self.r.lrange(str(app), 0, -1)
         # len = r.llen(str(app))
@@ -57,10 +63,10 @@ class Estransmission():
             '''
             while record['bidirectional_first_seen_ms'] > basetime:
                 record['bidirectional_first_seen_ms'] -= 60 * 60 * 24 * self.slideCycle
-            record['bidirectional_first_seen_ms'] += basetime
+            record['bidirectional_first_seen_ms'] += 60 * 60 * 24 * self.slideCycle
             action = {
                 "_index": self.changeTolowerCase(str(app)),
-                "_type": "none",
+                "_type": "_doc",
                 "_source": {
                     "bidirectional_first_seen_ms":record['bidirectional_first_seen_ms'],
                     "bidirectional_duration_ms":record['bidirectional_duration_ms'],
@@ -81,6 +87,7 @@ class Estransmission():
                     "src2dst_ack_packets":record['src2dst_ack_packets'],
                     "src2dst_duration_ms":record['src2dst_duration_ms'],
                     "src2dst_ip_bytes":record['src2dst_ip_bytes'],
+                    "src2dst_max_piat_ms":record['src2dst_max_piat_ms'],
                     "src2dst_mean_piat_ms":record['src2dst_ip_bytes'],
                     "dst2src_min_raw_ps":record['dst2src_min_raw_ps'],
                     "src2dst_raw_bytes":record['src2dst_raw_bytes'],
@@ -88,7 +95,7 @@ class Estransmission():
                 }
             }
             ACTIIONS.append(action)
-        helpers.bulk(self.es, ACTIIONS, index=str(app))
+        helpers.bulk(self.es, ACTIIONS, index=str(app).lower())
 
     def changeTolowerCase(self,string):
         '''
@@ -104,7 +111,7 @@ class Estransmission():
         :param filename: 索引名称
         :return: 是否创建成功
         '''
-        _index_name=filename.split(".")[0].lower()
+        _index_name=self.changeTolowerCase(filename)
         #_index_name=self.changeTolowerCase(_index_name)
         #_index_name=filename
         _index_mapping={
@@ -167,6 +174,9 @@ class Estransmission():
                         "src2dst_ip_bytes": {
                             'type': 'float'
                         },
+                        "src2dst_max_piat_ms":{
+                            'type':'float'
+                        },
                         "src2dst_mean_piat_ms": {
                             'type': 'float'
                         },
@@ -222,15 +232,15 @@ class Estransmission():
         :return: 是否异常
         '''
         time=flow['bidirectional_first_seen_ms']
-        file=flow['application_name']+".csv"
+        file=flow['application_name'].lower()
         basetime=self.getBaseTime(flow['application_name'])
 
         while(time > basetime):
             time-=60*60*24*self.slideCycle
-        time += basetime
+        time += 60*60*24*self.slideCycle
 
         #_window_size = int(file.split("-")[-1])/2
-        _window_size=self.windowSize
+        _window_size=self.windowSize >> 1
         _find_early_flow_body = {"size":_window_size,"query": {"range":{"bidirectional_first_seen_ms": {"lte": time}}},"sort":{"bidirectional_first_seen_ms":{"order":"desc"}}}
         _find_later_flow_body = {"size":_window_size,"query": {"range":{"bidirectional_first_seen_ms": {"gte": time}}},"sort":{"bidirectional_first_seen_ms":{"order":"asc"}}}
 
@@ -242,20 +252,42 @@ class Estransmission():
         # print("-------------------------------------------------------------")
         # print(json.dumps(_later['hits']['hits'][0], sort_keys=True, indent=4, separators=(',', ':'),ensure_ascii=False))
 
-        _neighbour_less = _early['hits']['hits'][1]['_source']
-        _neighbour_more = _later['hits']['hits'][1]['_source']
+        _early_count = _early['hits']['total']['value']
+        _later_count = _later['hits']['total']['value']
 
-        if time - int(_neighbour_less['bidirectional_first_seen_ms']) > \
-                        int(_neighbour_more['bidirectional_first_seen_ms']) - time:
-            neighbour=_neighbour_more
-        else:
-            neighbour=_neighbour_less
-        count=0
-        for _ in neighbour:
 
-            if(neighbour[_]*0.2 < flow[_] or neighbour[_]*0.2 > flow[_]):
-                count += 1
-        if count > self.threshold:
-            return True
+        if _early_count == 0:
+            raise ValueError("time line error")#不可能早于最早时间
         else:
-            return False
+            res=[]
+            for i in range(1,_early_count):
+                temp=[]
+                for attr in self.attrlist:
+                    temp.append(_early['hits']['hits'][i]['_source'][attr])
+                res.append(temp)
+
+            for i in range(0,_later_count):
+                temp = []
+                for attr in self.attrlist:
+                    temp.append(_later['hits']['hits'][i]['_source'][attr])
+                res.append(temp)
+            res=np.asarray(res,dtype=np.float)
+
+            mean=res.mean(axis=0)
+            var=res.var(axis=0)
+
+            '''
+            进行标准正态化
+            90%分位数：1.28155
+            95%分位数：1.64485
+            '''
+            threshold=len(self.attrlist)*0.3
+            r=0
+            for attr in self.attrlist:
+                value=(float(flow[attr])-mean)/var
+                if value > self.Percentile['_90']:
+                    r+=1
+            if(r>threshold):
+                return True
+            else:
+                return False
