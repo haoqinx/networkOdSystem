@@ -1,4 +1,4 @@
-# what is the networkOdSystem
+# What is the networkOdSystem?
 A Detection system for abnormal network traffic in different application categories. Use custom nfstream, nDPI, Redis, Elasticsearch, logstash, Kibana, pyod and other technologies.
 ## Dependencies
 1. redis running on port which decleared in ./config/config.ini

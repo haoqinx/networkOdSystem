@@ -63,6 +63,7 @@ class DWS():
         pass
 
     def run(self,_buffer_slide,_buffer_od):
+        print("start filtering...................")
         my_capture_streamer = NFStreamer(source=self.interface,  # or live interface
                                          snaplen=65535,
                                          idle_timeout=30,

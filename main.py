@@ -11,7 +11,7 @@ import time
 import psutil
 import json
 import joblib
-
+from threading import Lock
 APP_LIST=[
     'HTTP.TikTok',
 ]
@@ -135,11 +135,8 @@ def model_controller(model_first,model_second,data_pretreatment,cycle,elasticsea
     :param elasticsearch: es对象
     :return: None
     '''
-    global MODEL_LIST
-    for i,odclass in enumerate(model_first):
-        for j,model in enumerate(MODEL_LIST):
-            model_first[i]._model_list[j] = joblib.load("./models/" + APP_LIST[i] + str("-") + str(model.__class__.__name__) + ".model")
-            model_first[i]._model_list[j] = joblib.load("./models/" + APP_LIST[i] + str("-") + str(model.__class__.__name__) + ".model")
+    global APP_LIST,MODEL_LIST
+
     start=time.time()
     while True:
         currentTime = time.time()
@@ -209,7 +206,7 @@ if __name__ == '__main__':
 
     if _csv_dir == "":
         for app in APP_LIST:
-            es.createIndex(app)
+            # es.createIndex(app) #将此操作放入下面函数一起操作，避免重复数据插入
             es.redis2es(app)
     else:
         for file in _csv_dir:
@@ -239,6 +236,13 @@ if __name__ == '__main__':
     '''
     控制异常检测模型迭代
     '''
+    for i, odclass in enumerate(_model_first):
+        for j, model in enumerate(ALGORITHM_LIST):
+            _model_first[i]._model_list[j] = joblib.load(
+                "./models/" + APP_LIST[i] + str("-") + str(model.__class__.__name__) + ".model")
+            _model_first[i]._model_list[j] = joblib.load(
+                "./models/" + APP_LIST[i] + str("-") + str(model.__class__.__name__) + ".model")
+
     thread_pool.submit(model_controller,_model_first,_model_second,_data_pretreatment,cycle,es)
     # '''
     #   控制滑动窗口模型定时更新的线程
@@ -262,24 +266,28 @@ if __name__ == '__main__':
     '''
 
     thread_pool.submit(dws.run,_buffer_slide,_buffer_od)
-    print("start capturing--------------------------------------------")
 
     '''
     设置两个线程池
     检查程序将网络流与滑动数据进行比较，将网络流数据送入异常检查程序判定 
     '''
+    # lock=Lock()
     while True:
         try:
+            print(_buffer_slide.qsize(),_buffer_od.qsize())
             if not (_buffer_slide.empty() and _buffer_od.empty()):
+                # lock.acquire()
                 flow = json.loads(_buffer_slide.get())
-                _slide_res=thread_pool.submit(es.slidwindowOD,flow)
+                flow_matrix = _buffer_od.get()
+                # lock.release()
+                _slide_res=es.slidwindowOD(flow)
                 app_name = flow['application_name']
-                flow_matrix=_buffer_od.get()
+
                 index = APP_LIST.index(app_name)
                 if MODEL_LIST[app_name] == 0:
-                    _od_res = thread_pool.submit(_model_first[index]._model_predict(flow_matrix))
+                    _od_res = _model_first[index]._model_predict(flow_matrix)
                 elif MODEL_LIST[app_name] == 1:
-                    _od_res = thread_pool.submit(_model_second[index]._model_predict(flow_matrix))
+                    _od_res = _model_second[index]._model_predict(flow_matrix)
                 else:
                     raise RuntimeError("except 0 or 1 of "+str(app_name)+" flag,but get "+str(MODEL_LIST[app_name])+" instead")
 
